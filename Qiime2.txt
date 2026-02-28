@@ -1,0 +1,82 @@
+##Activate Qiime 2
+conda activate qiime2-amplicon-2024.2    
+source tab-qiime
+
+##Load paired end 18S FASTQ files into Qiime 2. This results in a .qza file with information on 18S sequences
+qiime tools import --type 'SampleData[PairedEndSequencesWithQuality]' --input-path raw-reads --input-format CasavaOneEightSingleLanePerSampleDirFmt --output-path demux-18Spaired.qza
+
+##Summarize and visualize quality of forward and reverse reads. Also gives summary of number of sequence reads per sample
+qiime demux summarize --i-data demux-18Spaired.qza --o-visualization demux-18Spaired.qzv
+qiime tools view demux-18Spaired.qzv
+
+##Primer Trimming
+##Run Cutadapt on demultiplexed reads to remove primers
+##18S sequences 
+## --p-front-f 1391F 
+## --p-adapter-f EukBR reverse complement
+## --p-front-r EukBR
+## --p-adapter-r 1391 reverse complement
+##Run
+qiime cutadapt trim-paired \
+--i-demultiplexed-sequences demux-18Spaired.qza  \
+--p-cores 2 \
+--p-front-f ACACTGACGACATGGTTCTACAGTACACACCGCCCGTC \
+--p-adapter-f GTAGGTGAACCTGCAGAAGGATCAAGACCAAGTCTCTGCTACCGTA\
+--p-front-r TACGGTAGCAGAGACTTGGTCTTGATCCTTCTGCAGGTTCACCTAC \
+--p-adapter-r GACGGGCGGTGTGTACTGTAGAACCATGTCGTCAGTGT \
+--verbose --p-error-rate 0.5  --o-trimmed-18Ssequences demux-18Strimmed.qza
+
+##Summarize and view cutadapted reads
+qiime demux summarize --i-data demux-18Strimmed.qza --o-visualization demux-18Strimmedsummary.qzv
+qiime tools view demux-18Strimmedsummary.qzv
+
+##Export trimmed reads back to FASTQ file format in new folder. 
+qiime tools export --input-path demux-18Strimmed.qza --output-path ../trimmedreads
+
+##Denoising using DADA2
+##Trim based on quality but also recognize that sequences with less than our truncation lengths will be removed. Need to consider length table
+##Denoise 18S
+qiime dada2 denoise-paired \
+--i-demultiplexed-seqs demux-18Strimmed.qza \
+--p-trim-left-f 15 \
+--p-trim-left-r 24
+--p-trunc-len-f 135 \
+--p-trunc-len-r 127 \
+--p-n-threads 2 \
+--o-representative-sequences seq18S.qza \
+--o-table table18S.qza \
+--o-denoising-stats stats18S.qza
+
+##Check reads passed through DADA2
+qiime metadata tabulate --m-input-file stats18S.qza --o-visualization stats18S.qzv
+qiime tools view stats18S.qzv
+
+##Import fasta/taxonomy files for latest version/release of PR2
+qiime tools inport \
+--type 'FeatureData[Sequence]' \
+--input-path pr2_version_5.0.0_SSU_mothur.fasta \
+--output-path pr2_seqs.qza
+
+qiime tools import \
+--type 'FeatureData[Taxonomy]' \
+--input-format HeaderlessTSVTaxonomyFormat \
+--input-path pr2_version_5.0.0_SSU_mothur.tax \
+--output-path pr2_tax.qza
+
+##Train classifier using the PR2 files
+qiime feature-classifier fit-classifier-naive-bayes \
+--i-reference-reads pr2_seqs.qza \
+--i-reference-taxonomy pr2-tax.qza \
+--o-classifier classifier_bayes.qza
+
+##Run classifier against 18s sequences from DADA2
+qiime feature-classifier classify-sklearn \
+--i-classifier classifier_bayes.qza \
+--i-reads ../dada2/seq18S.qza \
+--o-classification asv-taxo.qza
+
+##View taxonomic assignments
+qiime metadata tabulate \
+--m-input-file asv-taxo.qza \
+--o-visualization asv-taxo.qzv
+qiime tools view asv-taxo.qzv
